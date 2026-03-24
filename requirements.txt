@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+python-jose[cryptography]
+passlib[argon2]
+python-dotenv
+cryptography
+requests
+pytest
+httpx
+pymongo

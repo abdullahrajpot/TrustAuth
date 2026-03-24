@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.env
+trustauth_client_state.json
+trustauth_tpm_key.pem
+.pytest_cache/

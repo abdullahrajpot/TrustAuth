@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TrustAuth · Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="layout">
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-mark">TA</div>
+        <div>
+          <h1>TrustAuth</h1>
+          <p>Hardware-style device binding · challenge-response login</p>
+        </div>
+      </div>
+      <div class="api-config">
+        <label for="apiBase">API base</label>
+        <input id="apiBase" type="text" placeholder="http://localhost:8000" autocomplete="off" />
+      </div>
+      <div class="api-config">
+        <label for="tpmBridgeBase">TPM bridge (local)</label>
+        <input id="tpmBridgeBase" type="text" placeholder="http://127.0.0.1:8740" autocomplete="off" title="Run: python -m tpm_bridge.server" />
+      </div>
+    </header>
+
+    <div class="status-bar">
+      <div class="health">
+        <span id="bridgeDot" class="status-dot" title="TPM bridge"></span>
+        <span id="bridgeLabel">TPM bridge: —</span>
+      </div>
+      <div class="health">
+        <span id="healthDot" class="status-dot"></span>
+        <span id="healthLabel">Checking API…</span>
+      </div>
+      <div class="user-pill">
+        Session: <strong id="userLabel">—</strong>
+      </div>
+      <button type="button" id="btnHealth" class="btn btn-ghost">Ping API</button>
+    </div>
+
+    <main class="grid">
+      <section id="guestSection" class="card">
+        <h2>Register <span class="badge">New user + device</span></h2>
+        <p class="help">
+          If the <strong>TPM bridge</strong> is online, registration uses your <strong>real TPM</strong> (via the local helper). Otherwise this page uses <strong>Web Crypto</strong> (keys stay in the browser only).
+        </p>
+        <form id="registerForm">
+          <div class="form-group">
+            <label for="regUsername">Username</label>
+            <input id="regUsername" name="username" required minlength="3" maxlength="50" autocomplete="username" />
+          </div>
+          <div class="form-group">
+            <label for="regPassword">Password</label>
+            <input id="regPassword" name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password" />
+          </div>
+          <div class="form-group">
+            <label for="regEmail">Email (optional)</label>
+            <input id="regEmail" name="email" type="email" autocomplete="email" />
+          </div>
+          <div class="form-group">
+            <label for="regDeviceName">Device name</label>
+            <input id="regDeviceName" name="device_name" placeholder="My laptop browser" maxlength="100" />
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="btn btn-primary">Register &amp; bind device</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="guestSectionLogin" class="card">
+        <h2>Log in <span class="badge">Password + device proof</span></h2>
+        <p id="deviceHint" class="help"></p>
+        <form id="loginForm">
+          <div class="form-group">
+            <label for="loginUsername">Username</label>
+            <input id="loginUsername" name="username" required autocomplete="username" />
+          </div>
+          <div class="form-group">
+            <label for="loginPassword">Password</label>
+            <input id="loginPassword" name="password" type="password" required autocomplete="current-password" />
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="btn btn-primary">Log in</button>
+            <button type="button" id="btnClearDevice" class="btn btn-ghost">Clear device key</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="loggedSection" class="card panels-full" hidden>
+        <h2>Your account <span class="badge">Devices &amp; sessions</span></h2>
+        <div class="btn-row" style="margin-bottom: 1rem;">
+          <button type="button" id="btnRefresh" class="btn btn-primary">Refresh</button>
+          <button type="button" id="btnLogout" class="btn btn-ghost">Log out</button>
+        </div>
+        <h3 style="font-size:0.9rem;margin:0.75rem 0 0.5rem;color:var(--muted);">Registered devices</h3>
+        <div id="deviceList" class="device-grid"></div>
+        <h3 style="font-size:0.9rem;margin:1.25rem 0 0.5rem;color:var(--muted);">Active sessions</h3>
+        <div id="sessionList" class="device-grid"></div>
+      </section>
+
+      <section class="card panels-full">
+        <h2>Activity log</h2>
+        <div id="activityLog" class="log-box"></div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
