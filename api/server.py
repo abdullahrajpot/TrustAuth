@@ -13,7 +13,18 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
-from database.mongo import devices, ensure_indexes, logs, next_device_id, next_session_id, next_user_id, sessions, users
+from database.mongo import (
+    device_requests,
+    devices,
+    ensure_indexes,
+    logs,
+    next_device_id,
+    next_device_request_id,
+    next_session_id,
+    next_user_id,
+    sessions,
+    users,
+)
 from tpm_manager.tpm_handler import TPMManager
 
 
@@ -56,6 +67,8 @@ class RegisterRequest(BaseModel):
     device_type: str = "laptop"
     tpm_public_key: str = Field(min_length=64)
     pcr_values: list = []
+    # Default true so older cached clients (that omit this field) can still add device requests.
+    attach_to_existing: bool = True
 
 
 class ChallengeRequest(BaseModel):
@@ -130,20 +143,29 @@ def health() -> dict:
 @app.post("/api/register")
 def register(data: RegisterRequest, req: Request) -> dict:
     try:
-        if users.find_one({"username": data.username}):
-            log_auth_event(None, None, "register", False, req.client.host, "username exists")
-            raise HTTPException(status_code=400, detail="Username already exists")
+        existing = users.find_one({"username": data.username})
+        is_new_user = existing is None
 
-        user_id = next_user_id()
-        users.insert_one(
-            {
-                "id": user_id,
-                "username": data.username,
-                "password_hash": hash_password(data.password),
-                "email": data.email,
-                "created_at": datetime.utcnow(),
-            }
-        )
+        if existing:
+            if not verify_password(data.password, existing["password_hash"]):
+                log_auth_event(existing["id"], None, "register", False, req.client.host, "bad password on attach")
+                raise HTTPException(status_code=401, detail="Invalid password for existing user")
+
+            user_id = existing["id"]
+            # Existing users must approve device enrollment before it becomes active.
+            device_is_active = False
+        else:
+            user_id = next_user_id()
+            users.insert_one(
+                {
+                    "id": user_id,
+                    "username": data.username,
+                    "password_hash": hash_password(data.password),
+                    "email": data.email,
+                    "created_at": datetime.utcnow(),
+                }
+            )
+            device_is_active = True
 
         device_id = next_device_id()
         devices.insert_one(
@@ -154,14 +176,35 @@ def register(data: RegisterRequest, req: Request) -> dict:
                 "device_type": data.device_type,
                 "public_key_pem": data.tpm_public_key,
                 "pcr_measurements": data.pcr_values,
-                "is_active": True,
+                "is_active": device_is_active,
                 "last_used": None,
                 "created_at": datetime.utcnow(),
             }
         )
 
+        if not is_new_user:
+            # Create an approval request tied to the new device.
+            request_id = next_device_request_id()
+            device_requests.insert_one(
+                {
+                    "id": request_id,
+                    "user_id": user_id,
+                    "device_id": device_id,
+                    "status": "pending",
+                    "requested_at": datetime.utcnow(),
+                }
+            )
+            log_auth_event(user_id, device_id, "register_pending", True, req.client.host, f"request_id={request_id}")
+            return {
+                "success": True,
+                "user_id": user_id,
+                "device_id": device_id,
+                "pending": True,
+                "request_id": request_id,
+            }
+
         log_auth_event(user_id, device_id, "register", True, req.client.host)
-        return {"success": True, "user_id": user_id, "device_id": device_id}
+        return {"success": True, "user_id": user_id, "device_id": device_id, "pending": False}
     except HTTPException:
         raise
     except Exception as exc:
@@ -265,6 +308,65 @@ def revoke_device(device_id: int, payload: dict = Depends(get_current_payload)) 
     devices.update_one({"id": device_id}, {"$set": {"is_active": False}})
     sessions.delete_many({"device_id": device_id})
     return {"success": True, "message": f"Device '{device['device_name']}' revoked"}
+
+
+@app.get("/api/device-requests")
+def list_device_requests(payload: dict = Depends(get_current_payload)) -> dict:
+    user_id = int(payload["sub"])
+    pending = list(
+        device_requests.find({"user_id": user_id, "status": "pending"}, {"_id": 0})
+    )
+    out = []
+    for r in pending:
+        dev = devices.find_one({"id": r["device_id"]}, {"_id": 0})
+        out.append(
+            {
+                "request_id": r["id"],
+                "device_id": r["device_id"],
+                "device_name": dev["device_name"] if dev else "Unknown",
+                "device_type": dev["device_type"] if dev else None,
+                "requested_at": r.get("requested_at", datetime.utcnow()).isoformat(),
+            }
+        )
+    return {"device_requests": out}
+
+
+@app.post("/api/device-requests/{request_id}/approve")
+def approve_device_request(request_id: int, payload: dict = Depends(get_current_payload)) -> dict:
+    user_id = int(payload["sub"])
+    req = device_requests.find_one({"id": request_id, "user_id": user_id})
+    if not req or req.get("status") != "pending":
+        raise HTTPException(status_code=404, detail="Request not found or not pending")
+
+    devices.update_one(
+        {"id": req["device_id"]},
+        {"$set": {"is_active": True}},
+    )
+    device_requests.update_one(
+        {"id": request_id},
+        {"$set": {"status": "approved", "approved_at": datetime.utcnow()}},
+    )
+    sessions.delete_many({"device_id": req["device_id"]})
+    return {"success": True}
+
+
+@app.post("/api/device-requests/{request_id}/reject")
+def reject_device_request(request_id: int, payload: dict = Depends(get_current_payload)) -> dict:
+    user_id = int(payload["sub"])
+    req = device_requests.find_one({"id": request_id, "user_id": user_id})
+    if not req or req.get("status") != "pending":
+        raise HTTPException(status_code=404, detail="Request not found or not pending")
+
+    devices.update_one(
+        {"id": req["device_id"]},
+        {"$set": {"is_active": False}},
+    )
+    device_requests.update_one(
+        {"id": request_id},
+        {"$set": {"status": "rejected", "rejected_at": datetime.utcnow()}},
+    )
+    sessions.delete_many({"device_id": req["device_id"]})
+    return {"success": True}
 
 
 @app.post("/api/logout")

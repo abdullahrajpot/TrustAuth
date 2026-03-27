@@ -19,6 +19,7 @@ devices = db["devices"]
 sessions = db["auth_sessions"]
 logs = db["auth_logs"]
 counters = db["counters"]
+device_requests = db["device_requests"]
 
 
 def _next_sequence(name: str) -> int:
@@ -42,6 +43,9 @@ def next_device_id() -> int:
 def next_session_id() -> int:
     return _next_sequence("session_id")
 
+def next_device_request_id() -> int:
+    return _next_sequence("device_request_id")
+
 
 def ensure_indexes() -> None:
     try:
@@ -52,6 +56,9 @@ def ensure_indexes() -> None:
         sessions.create_index([("user_id", ASCENDING)])
         sessions.create_index([("device_id", ASCENDING)])
         logs.create_index([("created_at", ASCENDING)])
+        device_requests.create_index([("user_id", ASCENDING)])
+        device_requests.create_index([("device_id", ASCENDING)])
+        device_requests.create_index([("status", ASCENDING)])
     except PyMongoError:
         # Keep API process bootable even if MongoDB is down.
         pass

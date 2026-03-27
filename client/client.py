@@ -64,6 +64,7 @@ class TrustAuthClient:
             "device_type": "laptop",
             "tpm_public_key": public_key,
             "pcr_values": self.tpm.get_pcr_values(),
+            "attach_to_existing": True,
         }
         response = requests.post(f"{self.server_url}/api/register", json=payload, timeout=15)
         if response.ok:

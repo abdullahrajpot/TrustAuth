@@ -345,13 +345,23 @@
         device_type: useTpm ? "browser+tpm-bridge" : "browser",
         tpm_public_key: pem,
         pcr_values: [],
+        attach_to_existing: true,
       };
       const res = await api("/api/register", { method: "POST", body: JSON.stringify(body) });
-      setDeviceStore({ username, deviceId: res.device_id, privateJwk: jwk, mode: mode });
+      setDeviceStore({
+        username,
+        deviceId: res.device_id,
+        privateJwk: jwk,
+        mode: mode,
+        pending: !!res.pending,
+      });
       toast(
         "Registered. Device #" + res.device_id + (useTpm ? " (TPM via bridge)." : " (Web Crypto)."),
         "success"
       );
+      if (res.pending) {
+        toast("Device enrollment requested. Ask the original user to approve it.", "success");
+      }
       log("Registered user " + username + ", device id " + res.device_id);
       updateAuthUI();
     } catch (err) {
@@ -370,6 +380,9 @@
     if (!dev || dev.username !== username) {
       toast("No device key for this user in this browser. Register first or use the same username.", "error");
       return;
+    }
+    if (dev.pending) {
+      toast("This device is pending approval. If it was just approved, try login again.", "error");
     }
     if (dev.mode === "tpm-bridge") {
       if (!isLocalDashboardOrigin(window.location.origin)) {
@@ -418,6 +431,12 @@
         }),
       });
       setToken(res.token);
+      if (dev) {
+        setDeviceStore({
+          ...dev,
+          pending: false,
+        });
+      }
       toast("Welcome, " + (res.user && res.user.username) + ".", "success");
       log("Login successful.");
       await refreshDashboard();
@@ -432,12 +451,14 @@
     if (!token) return;
     saveApiBase();
     try {
-      const [devicesRes, sessionsRes] = await Promise.all([
+      const [devicesRes, sessionsRes, pendingRes] = await Promise.all([
         api("/api/devices", { method: "GET", headers: { Authorization: "Bearer " + token } }),
         api("/api/sessions", { method: "GET", headers: { Authorization: "Bearer " + token } }),
+        api("/api/device-requests", { method: "GET", headers: { Authorization: "Bearer " + token } }),
       ]);
       renderDevices(devicesRes.devices || []);
       renderSessions(sessionsRes.sessions || []);
+      renderPending(pendingRes.device_requests || []);
       log("Dashboard refreshed.");
     } catch (err) {
       toast(err.message, "error");
@@ -514,6 +535,48 @@
     });
   }
 
+  function renderPending(list) {
+    const root = document.getElementById("pendingList");
+    if (!root) return;
+    root.innerHTML = "";
+    if (!list.length) {
+      root.innerHTML = "<p class=\"help\">No pending device approvals.</p>";
+      return;
+    }
+    list.forEach((r) => {
+      const row = document.createElement("div");
+      row.className = "device-row";
+      row.innerHTML =
+        "<div>" +
+        "<div class=\"name\">Request #" +
+        r.request_id +
+        "</div>" +
+        "<div class=\"meta\">Device " +
+        r.device_id +
+        " · " +
+        escapeHtml(r.device_name) +
+        "</div></div>";
+      const actions = document.createElement("div");
+      actions.className = "btn-row";
+      const approveBtn = document.createElement("button");
+      approveBtn.type = "button";
+      approveBtn.className = "btn btn-primary";
+      approveBtn.textContent = "Approve";
+      approveBtn.addEventListener("click", () => approveRequest(r.request_id));
+      actions.appendChild(approveBtn);
+
+      const rejectBtn = document.createElement("button");
+      rejectBtn.type = "button";
+      rejectBtn.className = "btn btn-ghost";
+      rejectBtn.textContent = "Reject";
+      rejectBtn.addEventListener("click", () => rejectRequest(r.request_id));
+      actions.appendChild(rejectBtn);
+
+      row.appendChild(actions);
+      root.appendChild(row);
+    });
+  }
+
   function escapeHtml(s) {
     if (!s) return "";
     const div = document.createElement("div");
@@ -557,9 +620,41 @@
     log("Logged out.");
     const dl = document.getElementById("deviceList");
     const sl = document.getElementById("sessionList");
+    const pl = document.getElementById("pendingList");
     if (dl) dl.innerHTML = "";
     if (sl) sl.innerHTML = "";
+    if (pl) pl.innerHTML = "";
     updateAuthUI();
+  }
+
+  async function approveRequest(requestId) {
+    const token = getToken();
+    if (!token) return;
+    try {
+      await api("/api/device-requests/" + requestId + "/approve", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token },
+      });
+      toast("Device approved.", "success");
+      await refreshDashboard();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
+  async function rejectRequest(requestId) {
+    const token = getToken();
+    if (!token) return;
+    try {
+      await api("/api/device-requests/" + requestId + "/reject", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token },
+      });
+      toast("Device rejected.", "success");
+      await refreshDashboard();
+    } catch (err) {
+      toast(err.message, "error");
+    }
   }
 
   function onClearDevice() {
